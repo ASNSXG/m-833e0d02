@@ -74,6 +74,14 @@ svg#map.drag { cursor: grabbing; }
 .near .min { font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--free); }
 .ow { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 0 6px; border-radius: 4px; border: 1px solid var(--ink); color: var(--ink); line-height: 1.5; }
 .legend .ow { border: 0; padding: 0; font-size: 0.9rem; }
+.pop { position: absolute; z-index: 5; width: min(270px, calc(100% - 24px)); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.22); padding: 10px 12px; display: grid; gap: 6px; font-size: 0.88rem; line-height: 1.4; }
+.pop h3 { margin: 0; padding-right: 22px; font-family: var(--font-display); font-size: 0.98rem; font-weight: 800; }
+.pop p { margin: 0; }
+.pop .x { position: absolute; top: 4px; right: 6px; width: 28px; height: 28px; border: 0; background: none; color: var(--muted); font-size: 1.2rem; cursor: pointer; }
+.pop .row { display: flex; flex-wrap: wrap; gap: 6px; }
+.pop .row button { font: inherit; font-size: 0.82rem; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
+.pop .row button[aria-pressed="true"] { border-color: var(--ink); font-weight: 600; }
+.pop .nav { margin-top: 0; padding: 8px 12px; }
 .nav { justify-self: start; display: inline-block; margin-top: 4px; padding: 9px 14px; border-radius: 6px; background: var(--free); color: var(--on-free); font-weight: 600; text-decoration: none; }
 .nav:focus-visible { outline: 3px solid var(--office); outline-offset: 2px; }
 .locstat { margin: 0; font-size: 0.9rem; color: var(--muted); }
@@ -97,6 +105,7 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
   </header>
 
   <div class="mapbox">
+    <div class="pop" id="pop" hidden></div>
     <svg id="map" role="img" aria-label="PBSB 周边街道停车类型地图"></svg>
     <div class="zoom">
       <button type="button" id="zin" aria-label="放大">+</button>
@@ -112,8 +121,9 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
   <div class="cols">
     <section class="card" id="info" aria-live="polite"></section>
     <section class="card">
-      <div class="eyebrow">离 PBSB 最近的免费街段</div>
-      <h2>先试这几段</h2>
+      <div class="eyebrow">步行 12 分钟内通常停满</div>
+      <h2>先试稍远一点的这些</h2>
+      <p style="margin:0;color:var(--muted);font-size:.88rem">在地图上点街道，弹出的小卡片里按“满了 / 有位置”，手机会记住；你标过“有位置”的街会排在最前面。</p>
       <ul class="near" id="near"></ul>
     </section>
   </div>
@@ -122,7 +132,7 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
     <p><strong>单双号怎么停：</strong>绿色的街按日期换边停。双号日期停门牌号是双数的一侧，单号日期停门牌号是单数的一侧。具体几点换边，看那段街上的路牌。</p>
     <p><strong>两边怎么看：</strong>每条街画成一条“路面”，两边的线就是两侧路边。绿色街上，实线那一侧今天能停，淡色虚线那一侧今天不能停；明天换过来。点开街段会写明哪一侧（东/西/南/北侧）是单号、哪一侧是双号。</p>
     <p><strong>单行道：</strong>地图上的黑色小箭头是允许行驶的方向（放大一点才会出现），点开街段也会写“只能往哪开”。开过去之前先看箭头，免得绕路。方向来自 Johnson County 道路数据，现场以路牌为准。</p>
-    <p><strong>“热门”是什么意思：</strong>那段街一年里被开了多少张单双号罚单。罚单多，说明很多人抢着停、查得也勤，车位满得最早；要么早点去，要么往外走一点找“较空”的街段。</p>
+    <p><strong>“好不好停”怎么来的：</strong>你自己在小卡片里按过“满了 / 有位置”的，以你的记录为准（只存在你这台手机的浏览器里）。没记录的：步行 12 分钟以内默认“通常停满”（你 10/14 实地看过）；更远的按一年的罚单数估计，罚单多的“可能较满”，少的“可能有位置”。</p>
     <p><strong>这张图的局限：</strong>它是从罚单推出来的，不是逐块抄的路牌。灰色的街一年没罚单，可能是禁停，也可能是免费但没人停。一切以现场路牌、下雪紧急令和施工为准。数据：City of Iowa City 2025 财年停车罚单（随 HNTB 市区停车调查公开）和 Johnson County 道路中心线。步行时间是估算。</p>
   </section>
 </div>
@@ -258,6 +268,7 @@ function draw() {
   svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
   const px = vb.w / svg.getBoundingClientRect().width;   // metres per screen pixel
   placeSides(px);
+  placePop();
   for (const t of labelEls) { t.setAttribute("font-size", 11.5 * px); t.setAttribute("stroke-width", 3 * px); t.style.display = px > 2.6 ? "none" : ""; }
   for (const { t } of ringEls) t.setAttribute("font-size", 10.5 * px);
   for (const A of arrows) { A.e.setAttribute("transform", `translate(${A.x} ${A.y}) rotate(${A.ang}) scale(${px * 1.15})`); A.e.style.display = px > 2.2 ? "none" : ""; }
@@ -299,7 +310,8 @@ const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; if
 svg.addEventListener("pointerup", e => {
   if (moved < 6 && ptrs.size === 1) {
     const hit = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.dataset && n.dataset.i != null);
-    if (hit) select(+hit.dataset.i, false);
+    if (hit) { const w = toWorld(e.clientX, e.clientY); select(+hit.dataset.i, false); popAt = { i: +hit.dataset.i, x: w.x, y: w.y }; renderPop(); }
+    else { popAt = null; renderPop(); }
   }
   up(e);
 });
@@ -310,7 +322,28 @@ document.getElementById("zhome").onclick = () => { vb = { x: -900, y: -700, w: 1
 
 /* ---------- selection card ---------- */
 let selI = null;
-const busy = n => n > 200 ? "非常热门" : n > 60 ? "热门" : "较空";
+/* Occupancy: her own notes first; otherwise she found blocks within ~12 min walk full (Wednesday, October 14). */
+const MD = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "numeric", day: "numeric" }).format(now);
+const keyOf = b => b.n + "|" + b.b;
+let OBS = {};
+try { OBS = JSON.parse(localStorage.getItem("pbsb-obs") || "{}") || {}; } catch (_) { OBS = {}; }
+function setObs(b, s) {
+  const k = keyOf(b);
+  if (OBS[k] && OBS[k].s === s && OBS[k].d === MD) delete OBS[k]; else OBS[k] = { s, d: MD };
+  try { localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {}
+}
+function busyOf(b) {
+  const o = OBS[keyOf(b)];
+  if (o) return `你 ${o.d} 记录：${o.s === "full" ? "满了" : "有位置"}`;
+  if (!KIND[b.k].free) return "";
+  if (b.w <= 12) return "通常停满";
+  return b.t[0] > 200 ? "可能较满" : "可能有位置";
+}
+function todaySide(b) {
+  if (b.k !== "oddeven") return KIND[b.k].name;
+  const ok = [b.sl, b.sr].filter(([, par]) => okToday(par));
+  return ok.length ? `今天停<strong>${ok.map(([d]) => DIRZH[d] + "侧").join("、")}</strong>（${even ? "双" : "单"}号）` : `今天停${even ? "双" : "单"}号一侧`;
+}
 function blockName(b) { return b.b !== "" && b.b != null ? `${b.n} ${b.b} 号街段` : b.n; }
 // map metres (x east, y south of PBSB) back to latitude/longitude for the navigation link
 const PB = { lat: 41.66156297, lon: -91.53064693 }, KLAT = 111320, KLON = 111320 * Math.cos(PB.lat * Math.PI / 180);
@@ -332,7 +365,40 @@ function drawSel() {
   if (selI == null) return;
   el("path", { d: pathD(DATA.blocks[selI]), fill: "none", stroke: css("--office"), "stroke-opacity": 0.5, "stroke-width": 22, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke", class: "sel" }, gSel);
 }
-function select(i, pan) {
+/* ---------- popup next to the tapped street ---------- */
+const pop = document.getElementById("pop");
+let popAt = null;   // { i, x, y } in map metres
+function renderPop() {
+  if (!popAt) { pop.hidden = true; return; }
+  const b = DATA.blocks[popAt.i], K = KIND[b.k], o = OBS[keyOf(b)], bz = busyOf(b);
+  pop.innerHTML = `<button type="button" class="x" aria-label="关闭">×</button>
+    <h3>${blockName(b)}</h3>
+    <p>${todaySide(b)}${b.o === 1 ? ` · 单行往${DIRZH[b.h]}${DIRARR[b.h]}` : ""}</p>
+    <p style="color:var(--muted)">走到 PBSB 约 ${Math.max(1, b.w)} 分钟${bz ? " · " + bz : ""}</p>
+    <a class="nav" href="${navUrl(b)}" target="_blank" rel="noopener">导航到这里 ↗</a>
+    ${K.free ? `<div class="row"><button type="button" data-obs="full" aria-pressed="${!!(o && o.s === "full" && o.d === MD)}">满了</button><button type="button" data-obs="open" aria-pressed="${!!(o && o.s === "open" && o.d === MD)}">有位置</button><button type="button" data-more>详情 ↓</button></div>` : `<div class="row"><button type="button" data-more>详情 ↓</button></div>`}`;
+  pop.hidden = false; placePop();
+}
+function placePop() {
+  if (!popAt || pop.hidden) return;
+  const r = svg.getBoundingClientRect();
+  const sx = (popAt.x - vb.x) / vb.w * r.width, sy = (popAt.y - vb.y) / vb.h * r.height;
+  if (sx < 0 || sy < 0 || sx > r.width || sy > r.height) { pop.style.visibility = "hidden"; return; }
+  pop.style.visibility = "";
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  // sit just below the tapped point (or above it when there is no room) so the street stays visible
+  let left = sx - w / 2, top = sy + 22;
+  if (top + h > r.height - 8) top = sy - h - 22;
+  left = Math.max(8, Math.min(left, r.width - w - 8)); top = Math.max(8, Math.min(top, r.height - h - 8));
+  pop.style.left = left + "px"; pop.style.top = top + "px";
+}
+pop.addEventListener("click", e => {
+  if (e.target.closest(".x")) { popAt = null; renderPop(); return; }
+  const ob = e.target.closest("[data-obs]");
+  if (ob) { setObs(DATA.blocks[popAt.i], ob.dataset.obs); renderPop(); select(popAt.i, false, true); renderList(); return; }
+  if (e.target.closest("[data-more]")) document.getElementById("info").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+function select(i, pan, keepPop) {
   selI = i; drawSel();
   const b = DATA.blocks[i], K = KIND[b.k];
   const [oe, mt, pm, np, ot] = b.t, total = oe + mt + pm + np + ot;
@@ -348,12 +414,13 @@ function select(i, pan) {
       <dt>行车方向</dt><dd>${b.o === 1 ? `<strong>单行道</strong>，只能往${DIRZH[b.h]}开 ${DIRARR[b.h]}` : b.o === 2 ? "步行街，不能开车" : "双向"}</dd>
       <dt>走到 PBSB</dt><dd>约 ${Math.max(1, b.w)} 分钟</dd>
       <dt>罚单（2024.7 – 2025.6）</dt><dd>${total ? `${total} 张：${[oe && "单双号 " + oe, mt && "咪表 " + mt, pm && "停车证 " + pm, np && "禁停 " + np, ot && "其他 " + ot].filter(Boolean).join("，")}` : "没有"}</dd>
-      ${b.k === "oddeven" ? `<dt>抢不抢手</dt><dd>${busy(oe)}</dd>` : ""}
+      ${busyOf(b) ? `<dt>好不好停</dt><dd>${busyOf(b)}</dd>` : ""}
     </dl>
     <a class="nav" href="${navUrl(b)}" target="_blank" rel="noopener">在 Google 地图里导航到这里 ↗</a>`;
   if (pan) {
     const pts = b.p.flat(); const mx = pts.reduce((s, q) => s + q[0], 0) / pts.length, my = pts.reduce((s, q) => s + q[1], 0) / pts.length;
-    vb.w = Math.min(vb.w, 1100); fit(); vb.x = mx - vb.w / 2; vb.y = my - vb.h / 2; draw();
+    vb.w = Math.min(vb.w, 1100); fit(); vb.x = mx - vb.w / 2; vb.y = my - vb.h / 2;
+    popAt = { i, x: mx, y: my }; renderPop(); draw();
     document.querySelector(".mapbox").scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
   }
 }
@@ -362,11 +429,19 @@ function select(i, pan) {
 document.getElementById("legend").innerHTML = Object.values(KIND).sort((a, b) => b.order - a.order)
   .map(K => `<span><i style="background:var(${K.color})"></i>${K.name}</span>`).join("") +
   `<span><i style="background:var(--office);width:10px;height:10px;border-radius:50%"></i>PBSB</span>` + `<span><i style="background:var(--me);width:10px;height:10px;border-radius:50%"></i>你现在的位置</span>` + `<span><b class="ow">➤</b>单行道方向（放大后显示）</span>` + `<span><i style="background:var(--free)"></i>实线 = 今天能停的一侧</span>` + `<span><i style="background:repeating-linear-gradient(90deg,var(--free) 0 4px,transparent 4px 7px);opacity:.5"></i>淡色虚线 = 今天不能停的一侧</span>`;
-const nearest = DATA.blocks.map((b, i) => ({ b, i })).filter(x => KIND[x.b.k].free && x.b.t[0] + x.b.t[4] >= 3)
-  .sort((x, y) => x.b.d - y.b.d).filter((x, k, a) => a.findIndex(y => y.b.n === x.b.n && y.b.b === x.b.b) === k).slice(0, 12);
-document.getElementById("near").innerHTML = nearest.map(({ b, i }) =>
-  `<li><button type="button" data-i="${i}"><span class="min">${Math.max(1, b.w)} 分钟</span><span>${blockName(b)}${b.o === 1 ? ` <span class="ow">单行${DIRARR[b.h]}</span>` : ""}</span>` +
-  `<span class="busy">${b.k === "oddeven" ? busy(b.t[0]) : "看路牌"}</span></button></li>`).join("");
+// Blocks she marked "有位置" first, then free blocks just beyond the ~12-minute ring that fills up.
+let nearest = [];
+function renderList() {
+  const cand = DATA.blocks.map((b, i) => ({ b, i })).filter(x => KIND[x.b.k].free && x.b.t[0] + x.b.t[4] >= 3)
+    .filter((x, k, a) => a.findIndex(y => y.b.n === x.b.n && y.b.b === x.b.b) === k);
+  const mine = cand.filter(x => (OBS[keyOf(x.b)] || {}).s === "open");
+  const far = cand.filter(x => x.b.w > 12 && (OBS[keyOf(x.b)] || {}).s !== "full" && !mine.includes(x)).sort((x, y) => x.b.d - y.b.d);
+  nearest = [...mine, ...far].slice(0, 14);
+  document.getElementById("near").innerHTML = nearest.map(({ b, i }) =>
+    `<li><button type="button" data-i="${i}"><span class="min">${Math.max(1, b.w)} 分钟</span><span>${blockName(b)}${b.o === 1 ? ` <span class="ow">单行${DIRARR[b.h]}</span>` : ""}</span>` +
+    `<span class="busy">${busyOf(b) || "看路牌"}</span></button></li>`).join("");
+}
+renderList();
 document.getElementById("near").addEventListener("click", e => { const btn = e.target.closest("button"); if (btn) select(+btn.dataset.i, true); });
 
 /* ---------- live location (works when the page is opened from its own https address) ---------- */
