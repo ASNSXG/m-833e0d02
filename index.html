@@ -20,6 +20,7 @@
   --office: #e7a812;
   --on-free: #ffffff;
   --me: #1a73e8;         /* your live position */
+  --park: #d9480f;       /* places you parked */
   --road: #e2e7e4;       /* street surface between the two curb lines */
   --road-faint: #edf0ee;
   --ring: #8a958f;
@@ -31,14 +32,14 @@
   :root:not([data-theme="light"]) {
     --bg: #121715; --panel: #1b2220; --ink: #e6ece8; --muted: #9aa7a0; --line: #2d3733;
     --street: #3c4743; --artery: #56625d; --free: #3fcf8a; --free-soft: #2f8f62;
-    --meter: #ff7a63; --permit: #b48cf0; --nopark: #c9d1cd; --office: #ffc23d; --ring: #66726c; --on-free: #08170f; --me: #5ea2ff; --road: #29312e; --road-faint: #212825;
+    --meter: #ff7a63; --permit: #b48cf0; --nopark: #c9d1cd; --office: #ffc23d; --ring: #66726c; --on-free: #08170f; --me: #5ea2ff; --park: #ff8f4d; --road: #29312e; --road-faint: #212825;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #121715; --panel: #1b2220; --ink: #e6ece8; --muted: #9aa7a0; --line: #2d3733;
   --street: #3c4743; --artery: #56625d; --free: #3fcf8a; --free-soft: #2f8f62;
-  --meter: #ff7a63; --permit: #b48cf0; --nopark: #c9d1cd; --office: #ffc23d; --ring: #66726c; --on-free: #08170f; --me: #5ea2ff; --road: #29312e; --road-faint: #212825;
+  --meter: #ff7a63; --permit: #b48cf0; --nopark: #c9d1cd; --office: #ffc23d; --ring: #66726c; --on-free: #08170f; --me: #5ea2ff; --park: #ff8f4d; --road: #29312e; --road-faint: #212825;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -84,6 +85,12 @@ svg#map.drag { cursor: grabbing; }
 .pop .nav { margin-top: 0; padding: 8px 12px; }
 .nav { justify-self: start; display: inline-block; margin-top: 4px; padding: 9px 14px; border-radius: 6px; background: var(--free); color: var(--on-free); font-weight: 600; text-decoration: none; }
 .nav:focus-visible { outline: 3px solid var(--office); outline-offset: 2px; }
+.parkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.parkbtn { font: inherit; font-weight: 700; padding: 10px 16px; border-radius: 6px; border: 2px solid var(--park); background: var(--panel); color: var(--park); cursor: pointer; }
+.parkbtn:focus-visible { outline: 3px solid var(--office); outline-offset: 2px; }
+.plist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 0.9rem; }
+.plist li { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.plist button { font: inherit; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .locstat { margin: 0; font-size: 0.9rem; color: var(--muted); }
 .locstat button { font: inherit; color: var(--free); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
 .near .busy { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
@@ -116,6 +123,10 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
   </div>
 
   <p class="locstat" id="locstat">点地图右上角的 ◎ 显示你现在的位置。</p>
+  <div class="parkbar">
+    <button type="button" id="parkHere" class="parkbtn">记录：我停在这里</button>
+    <span id="parkmsg" class="locstat"></span>
+  </div>
   <div class="legend" id="legend"></div>
 
   <div class="cols">
@@ -127,6 +138,8 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
       <ul class="near" id="near"></ul>
     </section>
   </div>
+
+  <section class="card" id="parklog"></section>
 
   <section class="notes">
     <p><strong>单双号怎么停：</strong>绿色的街按日期换边停。双号日期停门牌号是双数的一侧，单号日期停门牌号是单数的一侧。具体几点换边，看那段街上的路牌。</p>
@@ -274,6 +287,7 @@ function draw() {
   for (const A of arrows) { A.e.setAttribute("transform", `translate(${A.x} ${A.y}) rotate(${A.ang}) scale(${px * 1.15})`); A.e.style.display = px > 2.2 ? "none" : ""; }
   office.setAttribute("r", 7 * px);
   meDot.setAttribute("r", 9 * px);
+  for (const c of parkEls) c.setAttribute("r", 7 * px);
   officeT.setAttribute("font-size", 13 * px); officeT.setAttribute("stroke-width", 3.5 * px);
   officeT.setAttribute("x", 11 * px); officeT.setAttribute("y", -10 * px);
 }
@@ -375,8 +389,10 @@ function renderPop() {
     <h3>${blockName(b)}</h3>
     <p>${todaySide(b)}${b.o === 1 ? ` · 单行往${DIRZH[b.h]}${DIRARR[b.h]}` : ""}</p>
     <p style="color:var(--muted)">走到 PBSB 约 ${Math.max(1, b.w)} 分钟${bz ? " · " + bz : ""}</p>
+    ${sightLine(b) ? `<p style="color:var(--muted)">${sightLine(b)}</p>` : ""}
     <a class="nav" href="${navUrl(b)}" target="_blank" rel="noopener">导航到这里 ↗</a>
-    ${K.free ? `<div class="row"><button type="button" data-obs="full" aria-pressed="${!!(o && o.s === "full" && o.d === MD)}">满了</button><button type="button" data-obs="open" aria-pressed="${!!(o && o.s === "open" && o.d === MD)}">有位置</button><button type="button" data-more>详情 ↓</button></div>` : `<div class="row"><button type="button" data-more>详情 ↓</button></div>`}`;
+    ${K.free ? `<div class="row"><button type="button" data-obs="full" aria-pressed="${!!(o && o.s === "full" && o.d === MD)}">满了</button><button type="button" data-obs="open" aria-pressed="${!!(o && o.s === "open" && o.d === MD)}">有位置</button><button type="button" data-more>详情 ↓</button></div>` : `<div class="row"><button type="button" data-more>详情 ↓</button></div>`}
+    <div class="row"><button type="button" data-park>我停在这里</button></div>`;
   pop.hidden = false; placePop();
 }
 function placePop() {
@@ -395,7 +411,8 @@ function placePop() {
 pop.addEventListener("click", e => {
   if (e.target.closest(".x")) { popAt = null; renderPop(); return; }
   const ob = e.target.closest("[data-obs]");
-  if (ob) { setObs(DATA.blocks[popAt.i], ob.dataset.obs); renderPop(); select(popAt.i, false, true); renderList(); return; }
+  if (ob) { recordSight(popAt, ob.dataset.obs); renderPop(); select(popAt.i, false, true); renderList(); return; }
+  if (e.target.closest("[data-park]")) { logPark(popAt.x, popAt.y, "map"); renderPop(); return; }
   if (e.target.closest("[data-more]")) document.getElementById("info").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 function select(i, pan, keepPop) {
@@ -488,6 +505,109 @@ function startLocate() {
 }
 document.getElementById("zme").onclick = startLocate;
 try { if (localStorage.getItem("pbsb-locate") === "1") startLocate(); } catch (_) {}
+
+/* ---------- parking log: where you actually found a spot ---------- */
+var parkEls = [];
+const PARK_KEY = "pbsb-park";
+let PARKS = [];
+try { PARKS = JSON.parse(localStorage.getItem(PARK_KEY) || "[]") || []; } catch (_) { PARKS = []; }
+const savePark = () => { try { localStorage.setItem(PARK_KEY, JSON.stringify(PARKS)); } catch (_) {} };
+const gPark = el("g", {}); svg.insertBefore(gPark, gMark);
+const fmtWhen = iso => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })
+    .formatToParts(new Date(iso)).map(q => [q.type, q.value]));
+  return `${p.weekday}, ${p.month} ${p.day} · ${p.hour}:${p.minute} ${p.dayPeriod}`;
+};
+const hourOf = iso => +new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(new Date(iso)) % 24;
+function nearestBlock(x, y) {
+  let best = null;
+  DATA.blocks.forEach((b, i) => b.p.forEach(pts => { for (let k = 1; k < pts.length; k++) {
+    const [ax, ay] = pts[k - 1], [cx, cy] = pts[k], dx = cx - ax, dy = cy - ay, L2 = dx * dx + dy * dy || 1;
+    const s = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2));
+    const d = Math.hypot(x - ax - s * dx, y - ay - s * dy);
+    if (!best || d < best.d) best = { d, i, left: ((x - ax) * dy - (y - ay) * dx) > 0 };   // left of drawn direction
+  } }));
+  if (!best || best.d > 60) return null;
+  const b = DATA.blocks[best.i]; const [dir, par] = best.left ? b.sl : b.sr;
+  return { i: best.i, dir, par };
+}
+function logPark(x, y, src) {
+  const nb = nearestBlock(x, y);
+  const rec = { t: new Date().toISOString(), x: Math.round(x), y: Math.round(y), src, i: nb ? nb.i : null, dir: nb ? nb.dir : null, par: nb ? nb.par : null };
+  PARKS.push(rec); savePark();
+  if (nb) { SIGHT.push({ t: rec.t, i: nb.i, s: "open", dir: nb.dir, parked: true }); saveSight(); }
+  if (nb) { OBS[keyOf(DATA.blocks[nb.i])] = { s: "open", d: MD }; try { localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {} }
+  renderPark(); renderList(); draw();
+  document.getElementById("parkmsg").textContent = nb
+    ? `已记录：${blockName(DATA.blocks[nb.i])} ${DIRZH[nb.dir]}侧（${src === "gps" ? "按定位" : "按地图上点的位置"}）`
+    : "已记录位置，但附近 60 米内没找到街段。";
+}
+/* every 有位置 / 满了 tap is kept with its time, so we can learn where spots open up and when */
+var SIGHT = [];
+try { SIGHT = JSON.parse(localStorage.getItem("pbsb-sight") || "[]") || []; } catch (_) { SIGHT = []; }
+function saveSight() { try { localStorage.setItem("pbsb-sight", JSON.stringify(SIGHT)); } catch (_) {} }
+function recordSight(at, s) {
+  const b = DATA.blocks[at.i], k = keyOf(b), was = OBS[k];
+  setObs(b, s);
+  const today = new Date().toDateString();
+  if (was && was.s === s && was.d === MD && !OBS[k]) {
+    // second tap on the same button today = undo the last matching note
+    for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].i === at.i && SIGHT[n].s === s && !SIGHT[n].parked && new Date(SIGHT[n].t).toDateString() === today) { SIGHT.splice(n, 1); break; }
+  } else {
+    const nb = nearestBlock(at.x, at.y);
+    SIGHT.push({ t: new Date().toISOString(), i: at.i, s, dir: nb && nb.i === at.i ? nb.dir : null, parked: false });
+  }
+  saveSight(); renderPark();
+}
+const hourSpan = hs => { if (!hs.length) return ""; const lo = Math.min(...hs), hi = Math.max(...hs); return lo === hi ? `${lo} 点左右` : `${lo}–${hi} 点`; };
+function sightStats(i) {
+  const mine = SIGHT.filter(r => keyOf(DATA.blocks[r.i]) === keyOf(DATA.blocks[i]));
+  const open = mine.filter(r => r.s === "open"), full = mine.filter(r => r.s === "full");
+  return { open: open.length, full: full.length, oh: open.map(r => hourOf(r.t)), fh: full.map(r => hourOf(r.t)) };
+}
+function sightLine(b) {
+  const i = DATA.blocks.indexOf(b), s = sightStats(i);
+  if (!s.open && !s.full) return "";
+  return "你的记录：" + [s.open && `有位置 ${s.open} 次（${hourSpan(s.oh)}）`, s.full && `满了 ${s.full} 次（${hourSpan(s.fh)}）`].filter(Boolean).join("，");
+}
+function renderPark() {
+  gPark.replaceChildren(); parkEls = [];
+  PARKS.forEach((r, n) => {
+    const c = el("circle", { cx: r.x, cy: r.y, r: 6, "vector-effect": "non-scaling-stroke", "stroke-width": 2 }, gPark);
+    c.setAttribute("fill", css("--park")); c.setAttribute("stroke", css("--panel")); c.setAttribute("fill-opacity", n === PARKS.length - 1 ? 1 : 0.55);
+    parkEls.push(c);
+  });
+  const box = document.getElementById("parklog");
+  if (!PARKS.length && !SIGHT.length) {
+    box.innerHTML = `<div class="eyebrow">我的停车记录</div><h2>还没有记录</h2><p style="margin:0;color:var(--muted)">停好车后点上面的“记录：我停在这里”。路过看到某段街有空位或者停满了，就在地图上点那段街，在小卡片里按“有位置”或“满了”，时间会一起记下。记录多了，这里会显示什么时间、哪里比较容易有车位。</p>`;
+    return;
+  }
+  const keys = [...new Set(SIGHT.map(r => keyOf(DATA.blocks[r.i])))];
+  const rows = keys.map(k => { const i = SIGHT.find(r => keyOf(DATA.blocks[r.i]) === k).i; return { i, ...sightStats(i) }; })
+    .sort((a, b) => (b.open - b.full) - (a.open - a.full) || b.open - a.open).slice(0, 8);
+  box.innerHTML = `<div class="eyebrow">车位观察记录（${SIGHT.length} 条，停车 ${PARKS.length} 次）</div>
+    <h2>什么时间、哪里有车位</h2>
+    <ul class="plist">${rows.map(s => `<li><span>${blockName(DATA.blocks[s.i])}</span><span class="busy">${[s.open && `有位置 ${s.open} 次 · ${hourSpan(s.oh)}`, s.full && `满了 ${s.full} 次 · ${hourSpan(s.fh)}`].filter(Boolean).join("<br>")}</span></li>`).join("")}</ul>
+    <h2 style="margin-top:6px">最近停车</h2>
+    <ul class="plist">${PARKS.map((r, n) => ({ r, n })).reverse().slice(0, 10).map(({ r, n }) =>
+      `<li><span>${fmtWhen(r.t)}<br><span style="color:var(--muted)">${r.i != null ? blockName(DATA.blocks[r.i]) + " " + DIRZH[r.dir] + "侧" : "未匹配到街段"}</span></span><button type="button" data-del="${n}" aria-label="删除这条记录">删除</button></li>`).join("")}</ul>`;
+}
+document.getElementById("parklog").addEventListener("click", e => {
+  const b = e.target.closest("[data-del]"); if (!b) return;
+  PARKS.splice(+b.dataset.del, 1); savePark(); renderPark(); draw();
+});
+document.getElementById("parkHere").onclick = () => {
+  const msg = document.getElementById("parkmsg");
+  if (me && me.acc < 80) { logPark(me.x, me.y, "gps"); return; }
+  if (!navigator.geolocation) { msg.textContent = "拿不到定位：请在地图上点你停的那段街，在小卡片里点“我停在这里”。"; return; }
+  msg.textContent = "正在定位…";
+  navigator.geolocation.getCurrentPosition(p => {
+    const x = (p.coords.longitude - PB.lon) * KLON, y = -(p.coords.latitude - PB.lat) * KLAT;
+    logPark(x, y, "gps");
+  }, () => { msg.textContent = "拿不到定位：请在地图上点你停的那段街，在小卡片里点“我停在这里”。"; },
+  { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+};
+renderPark();
 
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", colors);
 new MutationObserver(colors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
