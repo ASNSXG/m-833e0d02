@@ -140,6 +140,7 @@ text.office { font-family: var(--font-display); font-weight: 800; fill: var(--in
   </div>
 
   <section class="card" id="parklog"></section>
+  <section class="card" id="syncbox"></section>
 
   <section class="notes">
     <p><strong>单双号怎么停：</strong>绿色的街按日期换边停。双号日期停门牌号是双数的一侧，单号日期停门牌号是单数的一侧。具体几点换边，看那段街上的路牌。</p>
@@ -537,7 +538,7 @@ function logPark(x, y, src) {
   PARKS.push(rec); savePark();
   if (nb) { SIGHT.push({ t: rec.t, i: nb.i, s: "open", dir: nb.dir, parked: true }); saveSight(); }
   if (nb) { OBS[keyOf(DATA.blocks[nb.i])] = { s: "open", d: MD }; try { localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {} }
-  renderPark(); renderList(); draw();
+  renderPark(); renderList(); draw(); scheduleSync();
   document.getElementById("parkmsg").textContent = nb
     ? `已记录：${blockName(DATA.blocks[nb.i])} ${DIRZH[nb.dir]}侧（${src === "gps" ? "按定位" : "按地图上点的位置"}）`
     : "已记录位置，但附近 60 米内没找到街段。";
@@ -552,12 +553,12 @@ function recordSight(at, s) {
   const today = new Date().toDateString();
   if (was && was.s === s && was.d === MD && !OBS[k]) {
     // second tap on the same button today = undo the last matching note
-    for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].i === at.i && SIGHT[n].s === s && !SIGHT[n].parked && new Date(SIGHT[n].t).toDateString() === today) { SIGHT.splice(n, 1); break; }
+    for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].i === at.i && SIGHT[n].s === s && !SIGHT[n].parked && new Date(SIGHT[n].t).toDateString() === today) { markDel(sightKey(SIGHT[n])); SIGHT.splice(n, 1); break; }
   } else {
     const nb = nearestBlock(at.x, at.y);
     SIGHT.push({ t: new Date().toISOString(), i: at.i, s, dir: nb && nb.i === at.i ? nb.dir : null, parked: false });
   }
-  saveSight(); renderPark();
+  saveSight(); renderPark(); scheduleSync();
 }
 const hourSpan = hs => { if (!hs.length) return ""; const lo = Math.min(...hs), hi = Math.max(...hs); return lo === hi ? `${lo} 点左右` : `${lo}–${hi} 点`; };
 function sightStats(i) {
@@ -594,7 +595,10 @@ function renderPark() {
 }
 document.getElementById("parklog").addEventListener("click", e => {
   const b = e.target.closest("[data-del]"); if (!b) return;
-  PARKS.splice(+b.dataset.del, 1); savePark(); renderPark(); draw();
+  const gone = PARKS[+b.dataset.del];
+  markDel(parkKey(gone));
+  for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].parked && SIGHT[n].t === gone.t) { markDel(sightKey(SIGHT[n])); SIGHT.splice(n, 1); }
+  PARKS.splice(+b.dataset.del, 1); savePark(); saveSight(); renderPark(); renderList(); draw(); scheduleSync();
 });
 document.getElementById("parkHere").onclick = () => {
   const msg = document.getElementById("parkmsg");
@@ -608,6 +612,72 @@ document.getElementById("parkHere").onclick = () => {
   { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
 };
 renderPark();
+
+/* ---------- cloud sync to the PRIVATE repo ASNSXG/parking-data (token stays on this phone only) ---------- */
+const GH_REPO = "ASNSXG/parking-data", GH_FILE = "data.json";
+var DEL = [];
+try { DEL = JSON.parse(localStorage.getItem("pbsb-del") || "[]") || []; } catch (_) { DEL = []; }
+const parkKey = r => "p|" + r.t, sightKey = r => "s|" + r.t + "|" + r.i + "|" + r.s;
+function markDel(k) { if (!DEL.includes(k)) DEL.push(k); try { localStorage.setItem("pbsb-del", JSON.stringify(DEL)); } catch (_) {} }
+const ghToken = () => { try { return localStorage.getItem("pbsb-gh-token") || ""; } catch (_) { return ""; } };
+const b64e = s => btoa(unescape(encodeURIComponent(s))), b64d = s => decodeURIComponent(escape(atob(s.replace(/\s/g, ""))));
+let syncState = "", syncTimer = null, syncing = false;
+async function ghGet(tok) {
+  const r = await fetch(`https://api.github.com/repos/${GH_REPO}/contents/${GH_FILE}?ref=main`, { headers: { Authorization: `Bearer ${tok}`, Accept: "application/vnd.github+json" }, cache: "no-store" });
+  if (r.status === 404) return { sha: null, data: { park: [], sight: [], obs: {}, del: [] } };
+  if (!r.ok) throw new Error(r.status === 401 ? "密钥无效或已过期" : r.status === 403 ? "密钥没有这个仓库的读写权限" : "GitHub 返回 " + r.status);
+  const j = await r.json(); return { sha: j.sha, data: JSON.parse(b64d(j.content)) };
+}
+async function ghPut(tok, data, sha) {
+  const r = await fetch(`https://api.github.com/repos/${GH_REPO}/contents/${GH_FILE}`, { method: "PUT",
+    headers: { Authorization: `Bearer ${tok}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "parking log update", content: b64e(JSON.stringify(data, null, 1)), branch: "main", ...(sha ? { sha } : {}) }) });
+  if (r.status === 409 || r.status === 422) return false;            // another device wrote first: pull and retry
+  if (!r.ok) throw new Error(r.status === 403 ? "密钥没有这个仓库的读写权限" : "GitHub 返回 " + r.status);
+  return true;
+}
+function mergeIn(remote) {
+  const del = new Set([...DEL, ...(remote.del || [])]); DEL = [...del];
+  const uniq = (a, keyf) => { const m = new Map(); a.forEach(r => m.set(keyf(r), r)); return [...m.values()].filter(r => !del.has(keyf(r))).sort((x, y) => x.t < y.t ? -1 : 1); };
+  PARKS = uniq([...(remote.park || []), ...PARKS], parkKey);
+  SIGHT = uniq([...(remote.sight || []), ...SIGHT], sightKey);
+  OBS = Object.assign({}, remote.obs || {}, OBS);
+  try { localStorage.setItem("pbsb-del", JSON.stringify(DEL)); localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {}
+  savePark(); saveSight();
+}
+async function syncNow() {
+  const tok = ghToken(); if (!tok || syncing) return;
+  syncing = true; syncState = "同步中…"; renderSync();
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { sha, data } = await ghGet(tok);
+      mergeIn(data);
+      const ok = await ghPut(tok, { version: 1, updated: new Date().toISOString(), park: PARKS, sight: SIGHT, obs: OBS, del: DEL }, sha);
+      if (ok) break;
+    }
+    syncState = "已同步 · " + fmtWhen(new Date().toISOString());
+    renderPark(); renderList(); draw();
+  } catch (e) { syncState = "同步失败：" + e.message; }
+  syncing = false; renderSync();
+}
+function scheduleSync() { if (!ghToken()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 1200); }
+function renderSync() {
+  const box = document.getElementById("syncbox"), tok = ghToken();
+  box.innerHTML = `<div class="eyebrow">云端备份</div>
+    <h2>${tok ? "已连接私有仓库" : "把记录备份到 GitHub 私有仓库"}</h2>
+    <p style="margin:0;color:var(--muted);font-size:.9rem">${tok ? (syncState || "每次记录后会自动备份。") : "备份后换手机、清了浏览器数据也不会丢。需要粘贴一次 GitHub 密钥，密钥只存在这台手机上。"}</p>
+    ${tok ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="parkbtn" id="syncNowBtn">立即同步</button><button type="button" class="parkbtn" id="syncOff" style="border-color:var(--line);color:var(--muted)">断开</button></div>`
+          : `<label for="tokIn" style="font-size:.9rem">GitHub 密钥（github_pat_ 开头）</label>
+             <input id="tokIn" type="password" autocomplete="off" style="font:inherit;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);width:100%">
+             <button type="button" class="parkbtn" id="tokSave">保存并同步</button>`}`;
+}
+document.getElementById("syncbox").addEventListener("click", e => {
+  if (e.target.id === "tokSave") { const v = document.getElementById("tokIn").value.trim(); if (!v) return; try { localStorage.setItem("pbsb-gh-token", v); } catch (_) {} renderSync(); syncNow(); }
+  if (e.target.id === "syncNowBtn") syncNow();
+  if (e.target.id === "syncOff") { try { localStorage.removeItem("pbsb-gh-token"); } catch (_) {} syncState = ""; renderSync(); }
+});
+renderSync();
+syncNow();
 
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", colors);
 new MutationObserver(colors).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
