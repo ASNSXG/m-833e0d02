@@ -280,6 +280,17 @@ const meAcc = el("circle", { r: 0, "fill-opacity": 0.15, "stroke-opacity": 0.4, 
 const meDot = el("circle", { r: 7, "vector-effect": "non-scaling-stroke", "stroke-width": 3 }, gMark);
 meAcc.style.display = meDot.style.display = "none";
 
+// extent of the drawn streets plus a small margin; the view never leaves it
+const EXT = (() => {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  DATA.blocks.forEach(b => b.p.forEach(pts => pts.forEach(([x, y]) => { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; })));
+  const m = 120; return { x0: x0 - m, y0: y0 - m, x1: x1 + m, y1: y1 + m };
+})();
+function clampVB() {
+  const W = EXT.x1 - EXT.x0, Hh = EXT.y1 - EXT.y0;
+  vb.x = vb.w >= W ? EXT.x0 + (W - vb.w) / 2 : Math.min(Math.max(vb.x, EXT.x0), EXT.x1 - vb.w);
+  vb.y = vb.h >= Hh ? EXT.y0 + (Hh - vb.h) / 2 : Math.min(Math.max(vb.y, EXT.y0), EXT.y1 - vb.h);
+}
 let vb = { x: -900, y: -700, w: 1800, h: 1400 };
 function fit() {
   const r = svg.getBoundingClientRect(); const asp = r.width / r.height;
@@ -287,6 +298,7 @@ function fit() {
   vb.h = vb.w / asp; vb.x = cx - vb.w / 2; vb.y = cy - vb.h / 2; draw();
 }
 function draw() {
+  clampVB();
   svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
   const px = vb.w / svg.getBoundingClientRect().width;   // metres per screen pixel
   placeSides(px);
@@ -313,7 +325,7 @@ function colors() {
 }
 const toWorld = (cx, cy) => { const r = svg.getBoundingClientRect(); return { x: vb.x + (cx - r.left) / r.width * vb.w, y: vb.y + (cy - r.top) / r.height * vb.h }; };
 function zoomAt(f, cx, cy) {
-  const w = Math.min(4200, Math.max(220, vb.w * f)); const k = w / vb.w;
+  const w = Math.min(Math.max(EXT.x1 - EXT.x0, (EXT.y1 - EXT.y0) * vb.w / vb.h), Math.max(220, vb.w * f)); const k = w / vb.w;
   const p = cx == null ? { x: vb.x + vb.w / 2, y: vb.y + vb.h / 2 } : toWorld(cx, cy);
   vb.x = p.x - (p.x - vb.x) * k; vb.y = p.y - (p.y - vb.y) * k; vb.w *= k; vb.h *= k; draw();
 }
@@ -336,7 +348,12 @@ svg.addEventListener("pointermove", e => {
   const r = svg.getBoundingClientRect();
   if (ptrs.size === 1) {                                   // one finger: move only
     const dx = cur.x - prev.x, dy = cur.y - prev.y; tapMoved += Math.abs(dx) + Math.abs(dy);
-    vb.x -= dx / r.width * vb.w; vb.y -= dy / r.height * vb.h; draw();
+    const oy = vb.y;
+    vb.x -= dx / r.width * vb.w; vb.y -= dy / r.height * vb.h; clampVB();
+    // whatever vertical movement the map could not absorb (it hit its edge) scrolls the page instead
+    const restY = dy - (oy - vb.y) / vb.h * r.height;
+    if (Math.abs(restY) > 0.5) window.scrollBy(0, -restY);
+    draw();
   } else if (base) {                                       // two fingers: zoom (and follow the midpoint)
     const v = [...ptrs.values()], d = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y) || 1, mx = (v[0].x + v[1].x) / 2, my = (v[0].y + v[1].y) / 2;
     vb.x -= (mx - base.mx) / r.width * vb.w; vb.y -= (my - base.my) / r.height * vb.h;
