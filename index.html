@@ -85,6 +85,7 @@ svg#map.drag { cursor: grabbing; }
 .pop .nav { margin-top: 0; padding: 8px 12px; }
 .nav { justify-self: start; display: inline-block; margin-top: 4px; padding: 9px 14px; border-radius: 6px; background: var(--free); color: var(--on-free); font-weight: 600; text-decoration: none; }
 .nav:focus-visible { outline: 3px solid var(--office); outline-offset: 2px; }
+.linkbtn { font: inherit; border: 0; background: none; color: var(--free); text-decoration: underline; cursor: pointer; padding: 0 4px; }
 .parkbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .parkbtn { font: inherit; font-weight: 700; padding: 10px 16px; border-radius: 6px; border: 2px solid var(--park); background: var(--panel); color: var(--park); cursor: pointer; }
 .parkbtn:focus-visible { outline: 3px solid var(--office); outline-offset: 2px; }
@@ -308,30 +309,44 @@ function zoomAt(f, cx, cy) {
   vb.x = p.x - (p.x - vb.x) * k; vb.y = p.y - (p.y - vb.y) * k; vb.w *= k; vb.h *= k; draw();
 }
 svg.addEventListener("wheel", e => { e.preventDefault(); zoomAt(Math.exp(e.deltaY * 0.0015), e.clientX, e.clientY); }, { passive: false });
-const ptrs = new Map(); let moved = 0, pinch0 = null;
-svg.addEventListener("pointerdown", e => { svg.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); moved = 0; svg.classList.add("drag");
-  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch0 = Math.hypot(a.x - b.x, a.y - b.y); } });
+const ptrs = new Map(); let tapOk = false, tapMoved = 0, base = null;
+function gestureBase() {
+  const v = [...ptrs.values()];
+  base = v.length >= 2 ? { d: Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y) || 1, mx: (v[0].x + v[1].x) / 2, my: (v[0].y + v[1].y) / 2 } : null;
+}
+svg.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 1) { tapOk = true; tapMoved = 0; } else tapOk = false;   // a second finger means it's a pinch, not a tap
+  gestureBase(); svg.classList.add("drag");
+});
 svg.addEventListener("pointermove", e => {
   if (!ptrs.has(e.pointerId)) return;
   const prev = ptrs.get(e.pointerId), cur = { x: e.clientX, y: e.clientY }; ptrs.set(e.pointerId, cur);
-  if (ptrs.size === 1) {
-    const r = svg.getBoundingClientRect(); const dx = (cur.x - prev.x) / r.width * vb.w, dy = (cur.y - prev.y) / r.height * vb.h;
-    vb.x -= dx; vb.y -= dy; moved += Math.abs(cur.x - prev.x) + Math.abs(cur.y - prev.y); draw();
-  } else if (ptrs.size === 2 && pinch0) {
-    const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
-    zoomAt(pinch0 / d, (a.x + b.x) / 2, (a.y + b.y) / 2); pinch0 = d; moved = 99;
+  const r = svg.getBoundingClientRect();
+  if (ptrs.size === 1) {                                   // one finger: move only
+    const dx = cur.x - prev.x, dy = cur.y - prev.y; tapMoved += Math.abs(dx) + Math.abs(dy);
+    vb.x -= dx / r.width * vb.w; vb.y -= dy / r.height * vb.h; draw();
+  } else if (base) {                                       // two fingers: zoom (and follow the midpoint)
+    const v = [...ptrs.values()], d = Math.hypot(v[0].x - v[1].x, v[0].y - v[1].y) || 1, mx = (v[0].x + v[1].x) / 2, my = (v[0].y + v[1].y) / 2;
+    vb.x -= (mx - base.mx) / r.width * vb.w; vb.y -= (my - base.my) / r.height * vb.h;
+    zoomAt(base.d / d, mx, my); base = { d, mx, my };
   }
 });
-const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch0 = null; if (!ptrs.size) svg.classList.remove("drag"); };
+function endPtr(e) { if (!ptrs.has(e.pointerId)) return; ptrs.delete(e.pointerId); gestureBase(); if (!ptrs.size) svg.classList.remove("drag"); }
 svg.addEventListener("pointerup", e => {
-  if (moved < 6 && ptrs.size === 1) {
+  if (tapOk && ptrs.size === 1 && tapMoved < 8) {
     const hit = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.dataset && n.dataset.i != null);
     if (hit) { const w = toWorld(e.clientX, e.clientY); select(+hit.dataset.i, false); popAt = { i: +hit.dataset.i, x: w.x, y: w.y }; renderPop(); }
     else { popAt = null; renderPop(); }
   }
-  up(e);
+  endPtr(e);
 });
-svg.addEventListener("pointercancel", up);
+svg.addEventListener("pointercancel", endPtr);
+svg.addEventListener("lostpointercapture", endPtr);
+["gesturestart", "gesturechange", "gestureend"].forEach(n => document.addEventListener(n, e => e.preventDefault(), { passive: false }));   // stop iOS page zoom
+
 document.getElementById("zin").onclick = () => zoomAt(0.7);
 document.getElementById("zout").onclick = () => zoomAt(1 / 0.7);
 document.getElementById("zhome").onclick = () => { vb = { x: -900, y: -700, w: 1800, h: 1400 }; fit(); };
@@ -392,6 +407,7 @@ function renderPop() {
     <p>${todaySide(b)}${b.o === 1 ? ` · 单行往${DIRZH[b.h]}${DIRARR[b.h]}` : ""}</p>
     <p style="color:var(--muted)">走到 PBSB 约 ${Math.max(1, b.w)} 分钟${bz ? " · " + bz : ""}</p>
     ${sightLine(b) ? `<p style="color:var(--muted)">${sightLine(b)}</p>` : ""}
+    ${lastNote && lastNote.i === popAt.i && Date.now() - new Date(lastNote.t) < 120000 ? `<p>已记录：<b>${KINDZH[lastNote.kind === "park" ? "park" : lastNote.s]}</b> · ${fmtShort(lastNote.t)} <button type="button" class="linkbtn" data-undo>撤销</button></p>` : ""}
     <a class="nav" href="${navUrl(b)}" target="_blank" rel="noopener">导航到这里 ↗</a>
     ${K.free ? `<div class="row"><button type="button" data-obs="full" aria-pressed="${!!(o && o.s === "full" && o.d === MD)}">满了</button><button type="button" data-obs="open" aria-pressed="${!!(o && o.s === "open" && o.d === MD)}">有位置</button><button type="button" data-more>详情 ↓</button></div>` : `<div class="row"><button type="button" data-more>详情 ↓</button></div>`}
     <div class="row"><button type="button" data-park>我停在这里</button></div>`;
@@ -413,8 +429,9 @@ function placePop() {
 pop.addEventListener("click", e => {
   if (e.target.closest(".x")) { popAt = null; renderPop(); return; }
   const ob = e.target.closest("[data-obs]");
+  if (e.target.closest("[data-undo]") && lastNote) { deleteRecord(lastNote.kind === "park" ? "park" : lastNote.s, lastNote.t, lastNote.i, lastNote.s); lastNote = null; renderPop(); return; }
   if (ob) { recordSight(popAt, ob.dataset.obs); renderPop(); select(popAt.i, false, true); renderList(); return; }
-  if (e.target.closest("[data-park]")) { logPark(popAt.x, popAt.y, "map"); renderPop(); return; }
+  if (e.target.closest("[data-park]")) { logPark(popAt.x, popAt.y, "map"); if (lastNote) lastNote.i = popAt.i; renderPop(); return; }
   if (e.target.closest("[data-more]")) document.getElementById("info").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 function select(i, pan, keepPop) {
@@ -538,40 +555,51 @@ function logPark(x, y, src) {
   const rec = { t: new Date().toISOString(), x: Math.round(x), y: Math.round(y), src, i: nb ? nb.i : null, dir: nb ? nb.dir : null, par: nb ? nb.par : null };
   PARKS.push(rec); savePark();
   if (nb) { SIGHT.push({ t: rec.t, i: nb.i, s: "open", dir: nb.dir, parked: true }); saveSight(); }
-  if (nb) { OBS[keyOf(DATA.blocks[nb.i])] = { s: "open", d: MD }; try { localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {} }
-  renderPark(); renderList(); draw(); scheduleSync();
-  document.getElementById("parkmsg").textContent = nb
-    ? `已记录：${blockName(DATA.blocks[nb.i])} ${DIRZH[nb.dir]}侧（${src === "gps" ? "按定位" : "按地图上点的位置"}）`
-    : "已记录位置，但附近 60 米内没找到街段。";
+  rebuildObs(); renderPark(); renderList(); draw(); scheduleSync();
+  lastNote = { kind: "park", t: rec.t, i: rec.i, s: "open" };
+  document.getElementById("parkmsg").innerHTML = (nb
+    ? `已记录停车：${blockName(DATA.blocks[nb.i])} ${DIRZH[nb.dir]}侧 · ${fmtShort(rec.t)}`
+    : `已记录停车（附近 60 米内没找到街段）· ${fmtShort(rec.t)}`) + ` <button type="button" class="linkbtn" id="parkUndo">撤销</button>`;
 }
 /* every 有位置 / 满了 tap is kept with its time, so we can learn where spots open up and when */
 var SIGHT = [];
 try { SIGHT = JSON.parse(localStorage.getItem("pbsb-sight") || "[]") || []; } catch (_) { SIGHT = []; }
 function saveSight() { try { localStorage.setItem("pbsb-sight", JSON.stringify(SIGHT)); } catch (_) {} }
 function recordSight(at, s) {
-  const b = DATA.blocks[at.i], k = keyOf(b), was = OBS[k];
-  setObs(b, s);
-  const today = new Date().toDateString();
-  if (was && was.s === s && was.d === MD && !OBS[k]) {
-    // second tap on the same button today = undo the last matching note
-    for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].i === at.i && SIGHT[n].s === s && !SIGHT[n].parked && new Date(SIGHT[n].t).toDateString() === today) { markDel(sightKey(SIGHT[n])); SIGHT.splice(n, 1); break; }
-  } else {
-    const nb = nearestBlock(at.x, at.y);
-    SIGHT.push({ t: new Date().toISOString(), i: at.i, s, dir: nb && nb.i === at.i ? nb.dir : null, parked: false });
-  }
-  saveSight(); renderPark(); scheduleSync();
+  const nb = nearestBlock(at.x, at.y);
+  const rec = { t: new Date().toISOString(), i: at.i, s, dir: nb && nb.i === at.i ? nb.dir : null, parked: false };
+  SIGHT.push(rec); lastNote = { kind: "sight", t: rec.t, i: rec.i, s };
+  rebuildObs(); saveSight(); renderPark(); renderList(); scheduleSync();
 }
-const hourSpan = hs => { if (!hs.length) return ""; const lo = Math.min(...hs), hi = Math.max(...hs); return lo === hi ? `${lo} 点左右` : `${lo}–${hi} 点`; };
-function sightStats(i) {
-  const mine = SIGHT.filter(r => keyOf(DATA.blocks[r.i]) === keyOf(DATA.blocks[i]));
-  const open = mine.filter(r => r.s === "open"), full = mine.filter(r => r.s === "full");
-  return { open: open.length, full: full.length, oh: open.map(r => hourOf(r.t)), fh: full.map(r => hourOf(r.t)) };
+var lastNote = null;
+const fmtShort = iso => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    .formatToParts(new Date(iso)).map(q => [q.type, q.value]));
+  return `${p.weekday}, ${p.month} ${p.day} ${p.hour}:${p.minute} ${p.dayPeriod}`;
+};
+const mdOf = iso => new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "numeric", day: "numeric" }).format(new Date(iso));
+const sameBlock = (r, i) => r.i != null && keyOf(DATA.blocks[r.i]) === keyOf(DATA.blocks[i]);
+function rebuildObs() {   // latest note per block, derived from the records so deleting a record also fixes the label
+  OBS = {};
+  [...SIGHT].sort((x, y) => x.t < y.t ? -1 : 1).forEach(r => { OBS[keyOf(DATA.blocks[r.i])] = { s: r.s, d: mdOf(r.t) }; });
+  try { localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {}
 }
+function blockStats(i) {
+  const by = a => a.slice().sort((x, y) => x.t < y.t ? -1 : 1);
+  return { parked: by(PARKS.filter(r => sameBlock(r, i))),
+           open: by(SIGHT.filter(r => !r.parked && r.s === "open" && sameBlock(r, i))),
+           full: by(SIGHT.filter(r => r.s === "full" && sameBlock(r, i))) };
+}
+const lastTimes = (arr, n = 3) => arr.slice(-n).reverse().map(r => fmtShort(r.t)).join("<br>") + (arr.length > n ? `<br>…共 ${arr.length} 次` : "");
 function sightLine(b) {
-  const i = DATA.blocks.indexOf(b), s = sightStats(i);
-  if (!s.open && !s.full) return "";
-  return "你的记录：" + [s.open && `有位置 ${s.open} 次（${hourSpan(s.oh)}）`, s.full && `满了 ${s.full} 次（${hourSpan(s.fh)}）`].filter(Boolean).join("，");
+  const s = blockStats(DATA.blocks.indexOf(b));
+  const parts = [s.parked.length && `停车 ${s.parked.length} 次`, s.open.length && `有位置 ${s.open.length} 次`, s.full.length && `满了 ${s.full.length} 次`].filter(Boolean);
+  if (!parts.length) return "";
+  const last = [...s.parked, ...s.open, ...s.full].sort((x, y) => x.t < y.t ? 1 : -1)[0];
+  return `你的记录：${parts.join("，")}（最近 ${fmtShort(last.t)}）`;
 }
+const KINDZH = { park: "停车", open: "有位置", full: "满了" };
+const KINDCOL = { park: "var(--park)", open: "var(--free)", full: "var(--meter)" };
 function renderPark() {
   gPark.replaceChildren(); parkEls = [];
   PARKS.forEach((r, n) => {
@@ -580,26 +608,44 @@ function renderPark() {
     parkEls.push(c);
   });
   const box = document.getElementById("parklog");
-  if (!PARKS.length && !SIGHT.length) {
-    box.innerHTML = `<div class="eyebrow">我的停车记录</div><h2>还没有记录</h2><p style="margin:0;color:var(--muted)">停好车后点上面的“记录：我停在这里”。路过看到某段街有空位或者停满了，就在地图上点那段街，在小卡片里按“有位置”或“满了”，时间会一起记下。记录多了，这里会显示什么时间、哪里比较容易有车位。</p>`;
+  const items = [...PARKS.map(r => ({ kind: "park", r })), ...SIGHT.filter(r => !r.parked).map(r => ({ kind: r.s, r }))].sort((x, y) => x.r.t < y.r.t ? 1 : -1);
+  if (!items.length) {
+    box.innerHTML = `<div class="eyebrow">我的记录</div><h2>还没有记录</h2><p style="margin:0;color:var(--muted)">停好车点上面的“记录：我停在这里”。路过看到某段街有空位或者停满了，在地图上点那段街，在小卡片里按“有位置”或“满了”。每条都会记下具体时间，记错了可以在这里删掉。</p>`;
     return;
   }
-  const keys = [...new Set(SIGHT.map(r => keyOf(DATA.blocks[r.i])))];
-  const rows = keys.map(k => { const i = SIGHT.find(r => keyOf(DATA.blocks[r.i]) === k).i; return { i, ...sightStats(i) }; })
-    .sort((a, b) => (b.open - b.full) - (a.open - a.full) || b.open - a.open).slice(0, 8);
-  box.innerHTML = `<div class="eyebrow">车位观察记录（${SIGHT.length} 条，停车 ${PARKS.length} 次）</div>
-    <h2>什么时间、哪里有车位</h2>
-    <ul class="plist">${rows.map(s => `<li><span>${blockName(DATA.blocks[s.i])}</span><span class="busy">${[s.open && `有位置 ${s.open} 次 · ${hourSpan(s.oh)}`, s.full && `满了 ${s.full} 次 · ${hourSpan(s.fh)}`].filter(Boolean).join("<br>")}</span></li>`).join("")}</ul>
-    <h2 style="margin-top:6px">最近停车</h2>
-    <ul class="plist">${PARKS.map((r, n) => ({ r, n })).reverse().slice(0, 10).map(({ r, n }) =>
-      `<li><span>${fmtWhen(r.t)}<br><span style="color:var(--muted)">${r.i != null ? blockName(DATA.blocks[r.i]) + " " + DIRZH[r.dir] + "侧" : "未匹配到街段"}</span></span><button type="button" data-del="${n}" aria-label="删除这条记录">删除</button></li>`).join("")}</ul>`;
+  const blocks = [...new Set(items.filter(x => x.r.i != null).map(x => keyOf(DATA.blocks[x.r.i])))]
+    .map(k => items.find(x => x.r.i != null && keyOf(DATA.blocks[x.r.i]) === k).r.i)
+    .map(i => ({ i, ...blockStats(i) }))
+    .sort((a, b) => (b.parked.length + b.open.length - b.full.length) - (a.parked.length + a.open.length - a.full.length));
+  const cell = (arr, kind) => arr.length ? `<div><b style="color:${KINDCOL[kind]}">${KINDZH[kind]} ${arr.length} 次</b><br><span class="busy">${lastTimes(arr)}</span></div>` : "";
+  box.innerHTML = `<div class="eyebrow">我的记录（停车 ${PARKS.length} 次 · 有位置 ${SIGHT.filter(r => !r.parked && r.s === "open").length} 次 · 满了 ${SIGHT.filter(r => r.s === "full").length} 次）</div>
+    <h2>每段街的情况</h2>
+    <ul class="plist">${blocks.map(s => `<li style="display:block"><div style="font-weight:600">${blockName(DATA.blocks[s.i])}</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:2px">${cell(s.parked, "park")}${cell(s.open, "open")}${cell(s.full, "full")}</div></li>`).join("")}</ul>
+    <h2 style="margin-top:6px">全部记录（最新在前）</h2>
+    <ul class="plist">${items.slice(0, 40).map(({ kind, r }) =>
+      `<li><span><b style="color:${KINDCOL[kind]}">${KINDZH[kind]}</b> · ${fmtShort(r.t)}<br><span style="color:var(--muted)">${r.i != null ? blockName(DATA.blocks[r.i]) + (r.dir ? " " + DIRZH[r.dir] + "侧" : "") : "未匹配到街段"}</span></span>`
+      + `<button type="button" data-delkind="${kind}" data-t="${r.t}" data-i="${r.i}" aria-label="删除这条记录">删除</button></li>`).join("")}</ul>`;
+}
+function deleteRecord(kind, tstr, i, s) {
+  if (kind === "park") {
+    const n = PARKS.findIndex(r => r.t === tstr); if (n < 0) return;
+    markDel(parkKey(PARKS[n])); PARKS.splice(n, 1);
+    for (let m = SIGHT.length - 1; m >= 0; m--) if (SIGHT[m].parked && SIGHT[m].t === tstr) { markDel(sightKey(SIGHT[m])); SIGHT.splice(m, 1); }
+  } else {
+    const n = SIGHT.findIndex(r => !r.parked && r.t === tstr && r.s === (s || kind) && String(r.i) === String(i)); if (n < 0) return;
+    markDel(sightKey(SIGHT[n])); SIGHT.splice(n, 1);
+  }
+  rebuildObs(); savePark(); saveSight(); renderPark(); renderList(); draw(); scheduleSync();
+  if (popAt) renderPop();
 }
 document.getElementById("parklog").addEventListener("click", e => {
-  const b = e.target.closest("[data-del]"); if (!b) return;
-  const gone = PARKS[+b.dataset.del];
-  markDel(parkKey(gone));
-  for (let n = SIGHT.length - 1; n >= 0; n--) if (SIGHT[n].parked && SIGHT[n].t === gone.t) { markDel(sightKey(SIGHT[n])); SIGHT.splice(n, 1); }
-  PARKS.splice(+b.dataset.del, 1); savePark(); saveSight(); renderPark(); renderList(); draw(); scheduleSync();
+  const b = e.target.closest("[data-delkind]"); if (!b) return;
+  deleteRecord(b.dataset.delkind, b.dataset.t, b.dataset.i);
+});
+document.getElementById("parkmsg").addEventListener("click", e => {
+  if (e.target.id !== "parkUndo" || !lastNote) return;
+  deleteRecord("park", lastNote.t); lastNote = null; document.getElementById("parkmsg").textContent = "已撤销。";
 });
 document.getElementById("parkHere").onclick = () => {
   const msg = document.getElementById("parkmsg");
@@ -643,7 +689,7 @@ function mergeIn(remote) {
   const uniq = (a, keyf) => { const m = new Map(); a.forEach(r => m.set(keyf(r), r)); return [...m.values()].filter(r => !del.has(keyf(r))).sort((x, y) => x.t < y.t ? -1 : 1); };
   PARKS = uniq([...(remote.park || []), ...PARKS], parkKey);
   SIGHT = uniq([...(remote.sight || []), ...SIGHT], sightKey);
-  OBS = Object.assign({}, remote.obs || {}, OBS);
+  rebuildObs();
   try { localStorage.setItem("pbsb-del", JSON.stringify(DEL)); localStorage.setItem("pbsb-obs", JSON.stringify(OBS)); } catch (_) {}
   savePark(); saveSight();
 }
